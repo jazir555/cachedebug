@@ -647,4 +647,3 @@ This plugin modifies final HTML output, increasing potential for conflicts with:
 - **Caches:** Clear all caches (browser, plugin, server) when testing streaming changes.
 - **Constants:** Be aware of constants defined in the main plugin file, as they control key behaviors and identifiers.
 
-By following both the general WordPress guidelines and these plugin-specific considerations, development on "WP Progressive HTML Loading" can be more efficient, robust, and maintainable.
