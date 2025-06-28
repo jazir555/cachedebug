@@ -1,0 +1,47 @@
+/* Cache Detector Admin Bar Styles */
+#wpadminbar #wp-admin-bar-cache_detector_status .ab-item {
+    text-decoration: none;
+}
+
+.cache-detector-status-text {
+    padding: 0 5px;
+    border-radius: 3px;
+    font-weight: bold;
+    text-shadow: none;
+}
+
+.cache-status-hit {
+    background-color: #4CAF50; /* Green */
+    color: white;
+}
+
+.cache-status-miss {
+    background-color: #f44336; /* Red */
+    color: white;
+}
+
+.cache-status-bypass {
+    background-color: #ff9800; /* Orange */
+    color: white;
+}
+
+.cache-status-dynamic {
+    background-color: #2196F3; /* Blue */
+    color: white;
+}
+
+.cache-status-uncached {
+    background-color: #757575; /* Grey */
+    color: white;
+}
+
+.cache-status-unknown {
+    background-color: #9E9E9E; /* Grey */
+    color: white;
+}
+
+/* Style for the icon */
+#wpadminbar #wp-admin-bar-cache_detector_status .ab-icon::before {
+    content: "\f110"; /* dashicons-performance */
+    top: 3px;
+}
