@@ -30,7 +30,8 @@ Current version focuses on detecting main page cache status and preparing for as
 The plugin inspects HTTP response headers for the main page and uses the browser's Performance API to analyze loaded assets (CSS, JS, images).
 It looks for specific headers from CDNs (like Cloudflare's `CF-Cache-Status`), server-level caches (e.g., LiteSpeed's `X-LiteSpeed-Cache`, SiteGround's `X-SG-Cache`, Varnish's `X-Cache`), and WordPress caching plugins (e.g., `X-WP-Rocket-Cache`).
 It also checks for HTML comments left by plugins like WP Rocket or W3 Total Cache (in debug mode).
-For assets, cache status is inferred from `transferSize`, `decodedBodySize`, and `serverTiming` entries in the Performance API, as direct header inspection for cross-origin assets is limited by CORS.
+For assets, cache status is inferred from `transferSize`, `decodedBodySize`, and `serverTiming` entries in the Performance API.
+For WordPress REST API calls (routes including `/wp-json/`) initiated from the frontend by an administrator's browser, the plugin intercepts these calls (Fetch API and XMLHttpRequest), captures their response headers, and analyzes them using the same logic as main page requests.
 
 = How do I see the cache status? =
 
@@ -40,6 +41,8 @@ Hovering over this item will reveal a dropdown:
 *   "View Raw Page Headers": Shows the HTTP response headers collected for the main page.
 *   A list of loaded assets (CSS, JS, images) from the current page, each with its inferred cache status (e.g., HIT, MISS, DOWNLOADED). Clicking an asset shows more details.
     *Note*: Asset data is sent from your browser to the server via AJAX and stored temporarily. It might take one page refresh after the initial visit for the full asset list to populate in the admin bar for a specific page.
+*   A list of recent WordPress REST API calls (e.g., `/wp-json/...`) made from the frontend. Each entry shows the HTTP method, endpoint path, and its analyzed cache status. Clicking an entry shows more details, including the full URL, HTTP status code, and raw response headers for that API call.
+    *Note*: REST API call data is also sent via AJAX and stored temporarily. The list shows calls initiated by your browser on frontend pages.
 
 = What do the statuses mean? =
 
@@ -72,9 +75,10 @@ For logged-in administrators, it collects headers on the server-side and uses th
 * Initial public release.
 * Detects main page cache status via HTTP headers and HTML comments.
 * Detects asset cache status (CSS, JS, images) using Performance API (transferSize, serverTiming) and AJAX.
-* Displays main page and asset cache statuses in the WordPress Admin Bar for logged-in administrators.
+* Detects cache status of WordPress REST API calls (`/wp-json/`) initiated from the frontend, by intercepting Fetch/XHR and analyzing response headers.
+* Displays main page, asset, and REST API call cache statuses in the WordPress Admin Bar for logged-in administrators.
 * Color-coded statuses for quick visual identification.
-* Handles known headers from Cloudflare, LiteSpeed, WP Rocket, W3 Total Cache (debug), SiteGround Optimizer, Varnish, and generic browser caching.
+* Handles known headers from Cloudflare, LiteSpeed, WP Rocket, W3 Total Cache (debug), SiteGround Optimizer, Varnish, and generic browser caching for all detection types.
 * Prioritized logic for interpreting multiple caching layers.
 
 == Upgrade Notice ==
@@ -92,5 +96,5 @@ Future considerations:
 * Deeper integration for specific plugin APIs if available and useful.
 * Visual cues on the frontend itself (optional overlay for admins).
 * History or logging of cache statuses for pages.
-* Support for detecting REST API endpoint caching.
 * More robust handling of Service Worker caches for assets.
+* Option to clear collected REST API call history from admin bar.

@@ -1,143 +1,212 @@
-// Cache Detector Assets - JavaScript
-(function() {
+// Cache Detector Assets JS
+// Responsible for collecting asset performance data and REST API call data.
+
+(function(global) {
     'use strict';
 
-    window.addEventListener('load', function() {
+    if (typeof cache_detector_ajax === 'undefined' || !cache_detector_ajax.ajax_url) {
+        console.warn('Cache Detector: AJAX config not available.');
+        return;
+    }
+    // Check for specific nonces
+    if (typeof cache_detector_ajax.asset_nonce === 'undefined' && typeof cache_detector_ajax.rest_api_nonce === 'undefined') {
+        console.warn('Cache Detector: Nonce config not available for any actions.');
+        return;
+    }
+    if (!cache_detector_ajax.current_page_url) {
+        console.warn('Cache Detector: Current page URL not available.');
+        return;
+    }
+
+
+    // --- Asset Collection Logic ---
+    function isPotentiallyCachedByBrowser(entry) {
+        if (entry.transferSize === 0 && entry.decodedBodySize > 0) { // Ensure it's not an empty file
+            return "HIT (Browser Cache - Memory/Disk)";
+        }
+        // Heuristic for 304: encodedBodySize is 0 (no new body), but transferSize > 0 (headers)
+        if (entry.encodedBodySize === 0 && entry.transferSize > 0 && entry.decodedBodySize > 0) {
+             return "HIT (Browser Cache - 304 Not Modified)";
+        }
+        return null;
+    }
+
+    function collectAndSendAssetData() {
         if (typeof performance === 'undefined' || typeof performance.getEntriesByType === 'undefined') {
-            console.warn('[Cache Detector] Performance API not supported.');
+            // console.warn('[Cache Detector] Performance API not supported for asset collection.');
+            return;
+        }
+        if (!cache_detector_ajax.asset_nonce) {
+            // console.log('[Cache Detector] Asset nonce not available, skipping asset data collection.');
             return;
         }
 
-        // Ensure this runs only for admins who can see the admin bar (implicit capability check)
-        // And only if our localized data is present
-        if (typeof cache_detector_ajax === 'undefined' || !cache_detector_ajax.nonce) {
-            // console.log('[Cache Detector] AJAX data not available for asset script.');
-            return;
-        }
+        setTimeout(function() { // Ensure all resources are loaded
+            const resources = performance.getEntriesByType('resource');
+            const assetData = [];
 
-        const resources = performance.getEntriesByType('resource');
-        const assetData = [];
+            resources.forEach(function(entry) {
+                let status = 'UNKNOWN';
+                let detectedBy = 'PerformanceAPI';
+                let serverTimingInfo = [];
 
-        resources.forEach(function(resource) {
-            let status = 'UNKNOWN';
-            let detectedBy = 'PerformanceAPI';
-            let transferSize = resource.transferSize;
-            let decodedBodySize = resource.decodedBodySize;
-            let serverTiming = [];
-
-            if (resource.serverTiming) {
-                resource.serverTiming.forEach(function(timing) {
-                    serverTiming.push({
-                        name: timing.name,
-                        duration: timing.duration,
-                        description: timing.description
-                    });
-                });
-            }
-
-            // Check for ServiceWorker involvement first
-            if (resource.deliveryType === 'servicebuffer') { // This is a custom property some SWs might set, not standard
-                status = 'HIT (ServiceWorker)'; // Example, actual detection is more complex
-                detectedBy = 'ServiceWorker Heuristic';
-            } else if (transferSize === 0 && decodedBodySize > 0) {
-                // If transferSize is 0 and it's not an empty file, it's likely from memory/disk cache (browser)
-                status = 'HIT (Browser Cache - Memory/Disk)';
-                detectedBy = 'PerformanceAPI (transferSize=0)';
-            } else if (transferSize > 0 && transferSize < decodedBodySize) {
-                // If transferSize is small but not 0, it could be a 304 Not Modified
-                // This is a heuristic. A small file could also just be small.
-                // True 304s often have transferSize representing only header size.
-                // Let's assume for now if it's significantly smaller.
-                // A more robust check would be to see if encodedBodySize is 0 and transferSize > 0
-                 if (resource.encodedBodySize === 0 && transferSize > 0) {
-                    status = 'HIT (Browser Cache - 304 Not Modified)';
-                    detectedBy = 'PerformanceAPI (encodedBodySize=0, transferSize>0)';
-                } else {
-                    // Could be a small file, or partial content, or just compressed well
-                    status = 'DOWNLOADED_OR_PARTIAL';
+                if (entry.serverTiming && entry.serverTiming.length > 0) {
+                    entry.serverTiming.forEach(st => serverTimingInfo.push({ name: st.name, description: st.description, duration: st.duration }));
+                    for (const st of entry.serverTiming) {
+                        const st_name_lower = st.name.toLowerCase();
+                        if (st_name_lower === 'cf-cache-status') { status = st.description.toUpperCase() + " (CF)"; detectedBy = 'Cloudflare (ServerTiming)'; break; }
+                        else if (st_name_lower === 'x-litespeed-cache') { status = st.description.toUpperCase() + " (LS)"; detectedBy = 'LiteSpeed (ServerTiming)'; break; }
+                        else if (st_name_lower === 'x-sg-cache') { status = st.description.toUpperCase() + " (SG)"; detectedBy = 'SiteGround (ServerTiming)'; break; }
+                        else if ((st_name_lower.includes('cdn') || st_name_lower.includes('cache')) && st.description.toUpperCase() === 'HIT') {
+                            status = 'HIT (CDN)'; detectedBy = 'ServerTiming (' + st_name_lower + ')'; break;
+                        }
+                    }
                 }
-            } else if (transferSize >= decodedBodySize && decodedBodySize > 0) {
-                status = 'DOWNLOADED'; // Likely fetched from the network
-                detectedBy = 'PerformanceAPI (transferSize >= decodedBodySize)';
-            } else if (decodedBodySize === 0 && transferSize > 0){
-                // Example: a redirect that isn't followed by the performance entry, or a HEAD response.
-                status = 'INFO (No Body)';
-            }
 
-
-            // Attempt to interpret server-timing headers if available
-            // This is highly dependent on server/CDN configuration
-            if (serverTiming.length > 0) {
-                let cdnHit = false;
-                let cfCacheStatus = null;
-                let otherServerTimingInfo = [];
-
-                serverTiming.forEach(function(st) {
-                    if (st.name === 'cdn-cache' && st.description === 'HIT') {
-                        cdnHit = true;
+                if (status === 'UNKNOWN') {
+                    const browserCachedStatus = isPotentiallyCachedByBrowser(entry);
+                    if (browserCachedStatus) {
+                        status = browserCachedStatus;
+                        detectedBy = 'Browser Cache Heuristics';
+                    } else if (entry.transferSize > 0 && entry.decodedBodySize > 0 && entry.transferSize >= entry.decodedBodySize) {
+                        status = 'DOWNLOADED/MISS'; detectedBy = 'PerformanceAPI (Size Analysis)';
+                    } else if (entry.transferSize > 0 && entry.decodedBodySize > 0 && entry.transferSize < entry.decodedBodySize) {
+                        status = 'COMPRESSED/MISS'; detectedBy = 'PerformanceAPI (Size Analysis)';
+                    } else if (entry.decodedBodySize === 0 && entry.transferSize > 0) {
+                        status = 'INFO (No Body/Redirect)'; detectedBy = 'PerformanceAPI';
+                    } else {
+                        status = 'UNKNOWN (Sizes: T' + entry.transferSize + '/D' + entry.decodedBodySize + '/E' + entry.encodedBodySize + ')';
                     }
-                    if (st.name === 'cf-cache-status') { // Cloudflare specific via Server-Timing
-                        cfCacheStatus = st.description;
-                    }
-                    // Akamai: Server-Timing: cdn-cache; desc=HIT
-                    // Fastly: Server-Timing: fastly_cache; desc=HIT
-                    // Generic: server-timing: cache;desc=hit
-                    if ((st.name.includes('cdn') || st.name.includes('cache')) && st.description.toUpperCase() === 'HIT') {
-                        cdnHit = true;
-                    }
-                    otherServerTimingInfo.push(st.name + ':' + st.description);
-                });
-
-                if (cfCacheStatus) {
-                    status = cfCacheStatus.toUpperCase() + ' (Cloudflare)';
-                    detectedBy = 'ServerTiming (cf-cache-status)';
-                } else if (cdnHit) {
-                    status = 'HIT (CDN)';
-                    detectedBy = 'ServerTiming (cdn-cache)';
-                } else if (otherServerTimingInfo.length > 0 && status === 'DOWNLOADED') {
-                    // If downloaded, but server timing has info, it might be a MISS from CDN
-                    status = 'MISS_OR_DYNAMIC (CDN)';
-                    detectedBy = 'ServerTiming ('+ otherServerTimingInfo.join(', ') +')';
                 }
-            }
 
-
-            assetData.push({
-                url: resource.name,
-                status: status,
-                transferSize: transferSize,
-                decodedBodySize: decodedBodySize,
-                initiatorType: resource.initiatorType,
-                detectedBy: detectedBy,
-                serverTiming: serverTiming // Send for more detailed analysis later
+                assetData.push({
+                    url: entry.name, status: status, transferSize: entry.transferSize,
+                    decodedBodySize: entry.decodedBodySize, initiatorType: entry.initiatorType,
+                    detectedBy: detectedBy, serverTiming: serverTimingInfo
+                });
             });
+
+            if (assetData.length > 0) {
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', cache_detector_ajax.ajax_url, true);
+                xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+                const params = 'action=cache_detector_receive_assets&nonce=' + cache_detector_ajax.asset_nonce + '&asset_data=' + encodeURIComponent(JSON.stringify(assetData)) + '&page_url=' + encodeURIComponent(cache_detector_ajax.current_page_url);
+                xhr.send(params);
+            }
+        }, 1200); // Increased delay slightly
+    }
+
+    // --- REST API Call Collection Logic ---
+    const collectedRestApiCalls = [];
+    let restApiSendTimeout = null;
+
+    function sendRestApiData() {
+        if (collectedRestApiCalls.length === 0 || !cache_detector_ajax.rest_api_nonce) {
+            if(collectedRestApiCalls.length > 0 && !cache_detector_ajax.rest_api_nonce) {
+                // console.log('[Cache Detector] REST API nonce not available, cannot send REST data.');
+                collectedRestApiCalls.length = 0; // Clear if cannot send
+            }
+            return;
+        }
+
+        const dataToSend = JSON.stringify(collectedRestApiCalls);
+        collectedRestApiCalls.length = 0; // Clear after copying
+
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', cache_detector_ajax.ajax_url, true);
+        xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+        const params = 'action=cache_detector_receive_rest_api_calls&nonce=' + cache_detector_ajax.rest_api_nonce + '&rest_api_calls=' + encodeURIComponent(dataToSend) + '&page_url=' + encodeURIComponent(cache_detector_ajax.current_page_url);
+        xhr.send(params);
+    }
+
+    function scheduleRestApiSend() {
+        clearTimeout(restApiSendTimeout);
+        restApiSendTimeout = setTimeout(sendRestApiData, 1800); // Send data 1.8s after the last call
+    }
+
+    function processXhrResponse(xhrInstance, method, url) {
+        if (!url || typeof url !== 'string' || !url.includes('/wp-json/')) {
+            return;
+        }
+        const status = xhrInstance.status;
+        const headersString = xhrInstance.getAllResponseHeaders();
+        const headersArray = headersString ? headersString.trim().split(/[\r\n]+/).filter(h => h.length > 0) : [];
+
+        collectedRestApiCalls.push({
+            url: xhrInstance.responseURL || url,
+            method: method ? method.toUpperCase() : 'GET',
+            status: status,
+            headers: headersArray
         });
+        scheduleRestApiSend();
+    }
 
-        if (assetData.length > 0) {
-            // Send data to backend via AJAX
-            const xhr = new XMLHttpRequest();
-            xhr.open('POST', cache_detector_ajax.ajax_url, true);
-            xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
-            xhr.onload = function() {
-                if (xhr.status >= 200 && xhr.status < 400) {
-                    // console.log('[Cache Detector] Asset data sent:', xhr.responseText);
-                    // Potentially trigger an event or update admin bar here if needed immediately
-                } else {
-                    console.error('[Cache Detector] Error sending asset data:', xhr.status, xhr.statusText);
+    if (typeof XMLHttpRequest !== 'undefined') {
+        const originalXhrOpen = XMLHttpRequest.prototype.open;
+        const originalXhrSend = XMLHttpRequest.prototype.send;
+
+        XMLHttpRequest.prototype.open = function(method, url) {
+            this._cd_method = method;
+            this._cd_url = url;
+            originalXhrOpen.apply(this, arguments);
+        };
+
+        XMLHttpRequest.prototype.send = function() {
+            if (this._cd_url && String(this._cd_url).includes('/wp-json/')) { // Only add listener for relevant URLs
+                this.addEventListener('loadend', function() {
+                    processXhrResponse(this, this._cd_method, this._cd_url);
+                }.bind(this));
+            }
+            originalXhrSend.apply(this, arguments);
+        };
+    }
+
+    if (global.fetch) {
+        const originalFetch = global.fetch;
+        global.fetch = function(input, init) {
+            const method = (init && init.method) ? init.method.toUpperCase() : 'GET';
+            let url = '';
+            if (typeof input === 'string') {
+                url = input;
+            } else if (input instanceof Request) {
+                url = input.url;
+            } else if (input && input.url) { // Handle Request-like objects
+                 url = input.url;
+            }
+
+
+            return originalFetch.apply(this, arguments).then(function(response) {
+                if (response.url && response.url.includes('/wp-json/')) {
+                    const headersArray = [];
+                    response.headers.forEach((value, name) => {
+                        headersArray.push(name + ": " + value);
+                    });
+                    collectedRestApiCalls.push({
+                        url: response.url,
+                        method: method,
+                        status: response.status,
+                        headers: headersArray
+                    });
+                    scheduleRestApiSend();
                 }
-            };
-            xhr.onerror = function() {
-                console.error('[Cache Detector] Network error sending asset data.');
-            };
+                return response;
+            }).catch(function(error) {
+                // console.error('Cache Detector: Fetch error:', error, "URL:", url);
+                throw error;
+            });
+        };
+    }
 
-            const params = new URLSearchParams();
-            params.append('action', 'cache_detector_receive_assets');
-            params.append('nonce', cache_detector_ajax.nonce);
-            params.append('asset_data', JSON.stringify(assetData));
-            params.append('page_url', window.location.href);
+    window.addEventListener('load', function() {
+        collectAndSendAssetData(); // Collect asset data on load
+    });
 
-
-            xhr.send(params.toString());
+    window.addEventListener('beforeunload', function() {
+        // Try to send any pending REST API data.
+        // This is best-effort as browsers might terminate script execution.
+        if (collectedRestApiCalls.length > 0) {
+            sendRestApiData();
         }
     });
-})();
+
+})(window);

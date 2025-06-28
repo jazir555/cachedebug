@@ -56,6 +56,87 @@ class Cache_Detector {
         add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_assets' ) );
 
         add_action( 'wp_ajax_cache_detector_receive_assets', array( $this, 'handle_receive_assets_ajax' ) );
+        add_action( 'wp_ajax_cache_detector_receive_rest_api_calls', array( $this, 'handle_receive_rest_api_calls_ajax' ) );
+    }
+
+    public function handle_receive_rest_api_calls_ajax() {
+        check_ajax_referer( 'cache_detector_rest_api_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( 'Permission denied.', 403 );
+            return;
+        }
+
+        $rest_api_calls_json = isset( $_POST['rest_api_calls'] ) ? stripslashes( $_POST['rest_api_calls'] ) : '';
+        $page_url = isset( $_POST['page_url'] ) ? esc_url_raw( $_POST['page_url'] ) : ''; // Initiating page URL
+
+        if ( empty( $rest_api_calls_json ) || empty( $page_url ) ) {
+            wp_send_json_error( 'Missing REST API call data or page URL.', 400 );
+            return;
+        }
+
+        $rest_api_calls = json_decode( $rest_api_calls_json, true );
+
+        if ( json_last_error() !== JSON_ERROR_NONE ) {
+            wp_send_json_error( 'Invalid JSON data for REST API calls: ' . json_last_error_msg(), 400 );
+            return;
+        }
+
+        $sanitized_api_calls = array();
+        if (is_array($rest_api_calls)) {
+            foreach ($rest_api_calls as $call) {
+                $headers_array = array();
+                if (isset($call['headers']) && is_array($call['headers'])) {
+                    foreach ($call['headers'] as $header_line) {
+                        if (is_string($header_line)) {
+                            $headers_array[] = sanitize_text_field($header_line);
+                        }
+                    }
+                }
+
+                $sanitized_call = array(
+                    'url'               => isset($call['url']) ? esc_url_raw($call['url']) : '',
+                    'method'            => isset($call['method']) ? sanitize_text_field(strtoupper($call['method'])) : 'GET',
+                    'status'            => isset($call['status']) ? absint($call['status']) : 0,
+                    'raw_headers'       => $headers_array, // Already sanitized
+                    'cache_status'      => $this->analyze_headers($headers_array), // Analyze headers to get cache status
+                    'initiating_page_url' => $page_url, // Already sanitized
+                );
+
+                if (!empty($sanitized_call['url']) && $sanitized_call['status'] > 0) {
+                    $sanitized_api_calls[] = $sanitized_call;
+                }
+            }
+        }
+
+        if (empty($sanitized_api_calls)) {
+            wp_send_json_error( 'No valid REST API call data provided after sanitization.', 400 );
+            return;
+        }
+
+        $user_id = get_current_user_id();
+        // Store all REST calls for a user in one transient, appending new calls.
+        $transient_key = 'cd_rest_calls_' . $user_id;
+        $existing_calls = get_transient( $transient_key );
+        if ( !is_array($existing_calls) ) {
+            $existing_calls = array();
+        }
+
+        // Add new calls, potentially replacing if the same URL was called again from the same page
+        // For simplicity now, just append. A more sophisticated merge could be done.
+        $updated_calls = array_merge($existing_calls, $sanitized_api_calls);
+        // Limit stored calls to avoid overly large transients, e.g., last 50 calls.
+        if (count($updated_calls) > 50) {
+            $updated_calls = array_slice($updated_calls, -50);
+        }
+
+        set_transient( $transient_key, $updated_calls, 15 * MINUTE_IN_SECONDS );
+
+        if ( defined('WP_DEBUG') && WP_DEBUG ) {
+            error_log('[Cache Detector] AJAX REST Handler: Received and stored ' . count($sanitized_api_calls) . ' REST API calls. Total stored: ' . count($updated_calls) . '. Initiating page: ' . $page_url);
+        }
+
+        wp_send_json_success( array( 'message' => 'REST API call data received.', 'count' => count( $sanitized_api_calls ) ) );
     }
 
     public function handle_receive_assets_ajax() {
@@ -148,7 +229,9 @@ class Cache_Detector {
                 'cache_detector_ajax',
                 array(
                     'ajax_url' => admin_url( 'admin-ajax.php' ),
-                    'nonce'    => wp_create_nonce( 'cache_detector_asset_nonce' ),
+                    'asset_nonce'    => wp_create_nonce( 'cache_detector_asset_nonce' ),
+                    'rest_api_nonce' => wp_create_nonce( 'cache_detector_rest_api_nonce' ),
+                    'current_page_url' => (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[REQUEST_URI]"
                 )
             );
         }
@@ -242,6 +325,68 @@ class Cache_Detector {
             }
         } else {
             if ( defined('WP_DEBUG') && WP_DEBUG && !is_admin() ) error_log('[Cache Detector] Admin Bar: No asset data in transient ' . $transient_key);
+        }
+
+        // Display REST API Calls
+        $rest_transient_key = 'cd_rest_calls_' . $user_id;
+        $rest_api_calls = get_transient( $rest_transient_key );
+
+        if ( $rest_api_calls && is_array( $rest_api_calls ) && !empty($rest_api_calls) ) {
+            $wp_admin_bar->add_node( array( 'id' => 'cache_detector_rest_api_title', 'parent' => 'cache_detector_status', 'title' => '--- REST API Calls (Last ' . count($rest_api_calls) . ') ---', 'href' => false, 'meta'  => array('class' => 'cache-detector-asset-title') ) );
+
+            // Display latest calls first
+            $reversed_calls = array_reverse($rest_api_calls);
+            $display_count = 0;
+
+            foreach ( $reversed_calls as $index => $call ) {
+                if ($display_count++ >= 15) { // Limit display to 15 most recent for brevity in admin bar
+                     $wp_admin_bar->add_node( array( 'id' => 'cache_detector_rest_api_limit', 'parent' => 'cache_detector_status', 'title' => '...more REST calls recorded (display limited)', 'href' => '#') );
+                    break;
+                }
+
+                $call_status_class = 'cache-status-unknown';
+                if (strpos($call['cache_status'], 'HIT') === 0) $call_status_class = 'cache-status-hit';
+                elseif (strpos($call['cache_status'], 'MISS') === 0) $call_status_class = 'cache-status-miss';
+                elseif (strpos($call['cache_status'], 'BYPASS') === 0) $call_status_class = 'cache-status-bypass';
+                elseif (strpos($call['cache_status'], 'DYNAMIC') === 0) $call_status_class = 'cache-status-dynamic';
+                elseif (strpos($call['cache_status'], 'UNCACHED') === 0) $call_status_class = 'cache-status-uncached';
+
+                $url_parts = parse_url($call['url']);
+                $path_display = isset($url_parts['path']) ? basename($url_parts['path']) : 'invalid_url';
+                if (isset($url_parts['query'])) $path_display .= '?' . $url_parts['query'];
+                if (strlen($path_display) > 40) $path_display = '...' . substr($path_display, -37);
+
+
+                $title = '<span class="' . esc_attr($call_status_class) . '" style="display: inline-block; padding: 0px 2px; border-radius: 2px; margin-right: 3px; font-size:0.9em;">' . esc_html( strtoupper(explode(' ', $call['cache_status'])[0]) ) . '</span> ';
+                $title .= esc_html( $call['method'] . ' ' . $path_display );
+
+                $raw_headers_string = '';
+                if (!empty($call['raw_headers']) && is_array($call['raw_headers'])) {
+                    foreach($call['raw_headers'] as $header) $raw_headers_string .= esc_js($header) . "\n";
+                } else {
+                    $raw_headers_string = 'No headers captured.';
+                }
+
+                $full_details = "Request URL: " . esc_js($call['url']) . "\n";
+                $full_details .= "Method: " . esc_js($call['method']) . "\n";
+                $full_details .= "HTTP Status: " . esc_js($call['status']) . "\n";
+                $full_details .= "Cache Status: " . esc_js($call['cache_status']) . "\n";
+                $full_details .= "Initiating Page: " . esc_js($call['initiating_page_url']) . "\n\n";
+                $full_details .= "Raw Response Headers:\n" . $raw_headers_string;
+
+                $wp_admin_bar->add_node( array(
+                    'id' => 'cache_detector_rest_api_' . $index,
+                    'parent' => 'cache_detector_status',
+                    'title' => $title,
+                    'href' => '#',
+                    'meta' => array(
+                        'title' => esc_attr($call['url']) . ' | Status: ' . esc_attr($call['cache_status']),
+                        'onclick' => 'alert("REST API Call Details:\n\n' . $full_details . '"); return false;'
+                    )
+                ) );
+            }
+        } else {
+             if ( defined('WP_DEBUG') && WP_DEBUG && !is_admin() ) error_log('[Cache Detector] Admin Bar: No REST API call data in transient ' . $rest_transient_key);
         }
     }
 
