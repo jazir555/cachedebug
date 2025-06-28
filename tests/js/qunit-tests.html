@@ -10,10 +10,13 @@
   <div id="qunit"></div>
   <div id="qunit-fixture"></div>
   <script src="node_modules/qunit/qunit/qunit.js"></script>
-  <!-- Add your plugin's JS files here if they can be tested in isolation -->
-  <!-- e.g., <script src="../../wp-progressive-html-loading/assets/js/admin.js"></script> -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/sinon.js/17.0.1/sinon.min.js"></script>
 
-  <!-- Add your test files here -->
+  <!-- Plugin's JS file to be tested -->
+  <script src="../../assets/cache-detector-assets.js"></script>
+
+  <!-- Test files -->
   <script src="test-example.js"></script>
+  <script src="test-cache-detector-assets.js"></script>
 </body>
 </html>
