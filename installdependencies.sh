@@ -152,10 +152,6 @@ if [ ! -d "${WP_TESTS_DIR}" ]; then
         echo "Locally downloaded composer.phar is at: $(pwd)/composer.phar"
       else
         echo "Using globally installed Composer: $(which composer)"
-
-        php composer.phar install
-      else
-
         composer install
       fi
     )
@@ -232,6 +228,7 @@ QUnit.module('Example Tests', function() {
 });
 EOF
   echo "QUnit setup complete. Open ${JS_TEST_DIR}/qunit-tests.html in a browser to run tests."
+fi # Added missing fi for the npm check
 # Assuming the script is run from the repository root
 # and tests/js/package.json exists
 if [ -f "tests/js/package.json" ]; then
