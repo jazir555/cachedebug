@@ -347,6 +347,19 @@ A structured release process helps ensure stability and clear communication.
     -   Familiarize yourself with the [Plugin Developer Guidelines](https://developer.wordpress.org/plugins/wordpress-org/detailed-plugin-guidelines/).
     -   Use Subversion (SVN) to commit and deploy your plugin to the repository.
     -   Keep your `trunk/` up-to-date for development versions and use `tags/` for stable releases.
+ 
+### 19. Progress Tracking
+
+A structured release process helps ensure stability and clear communication.
+
+-   **Tracking Progress**: Use the `todolist.md` file in the repo (create one if it doesn't exist) to keep track of your progress and plan out tasks.
+    -   Break down larger goals (e.g., "Implement user authentication") into small, specific, and actionable tasks.
+    -   Use Markdown checkboxes (`- [ ]` for incomplete, `- [x]` for complete) to clearly mark the status of each task.
+    -   Organize tasks by priority or milestone (e.g., "v1.0 Release", "v1.1 Features") to focus efforts on what's most important.
+-   **Versioning and Release Notes**:
+    -   Adopt **Semantic Versioning** (`MAJOR.MINOR.PATCH`) to clearly communicate the impact of changes with each release. (e.g., `v1.2.1`).
+    -   Maintain a `CHANGELOG.md` file to provide a human-readable summary of new features, bug fixes, and breaking changes for each version.
+    -   Create an annotated Git tag for every release (`git tag -a v1.0.0 -m "Release message"`) to permanently mark that point in the project's history.
 
 ## Part II: Example Plugin Implementation & Conventions
 
