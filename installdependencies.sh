@@ -38,7 +38,14 @@ apt-get update -y
 apt-get install -y \
     software-properties-common curl wget gnupg2 lsb-release \
     apache2 mysql-server \
-    unzip git nodejs npm # For WP test environment build steps
+    unzip git nodejs npm \
+    # Puppeteer dependencies for Debian/Ubuntu
+    ca-certificates fonts-liberation libasound2 libatk-bridge2.0-0 libatk1.0-0 \
+    libc6 libcairo2 libcups2 libdbus-1-3 libexpat1 libfontconfig1 libgbm1 \
+    libgcc1 libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libpango-1.0-0 \
+    libpangocairo-1.0-0 libstdc++6 libx11-6 libx11-xcb1 libxcb1 \
+    libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 libxi6 \
+    libxrandr2 libxrender1 libxss1 libxtst6 lsb-release wget xdg-utils
 
 echo ">>> Installing PHP ${PHP_VERSION} and required extensions..."
 add-apt-repository -y ppa:ondrej/php
@@ -236,7 +243,10 @@ if [ -f "tests/js/package.json" ]; then
     echo "Installing QUnit dependencies via npm in tests/js/..."
     (
       cd tests/js
+      echo "Running npm install in tests/js..."
       npm install
+      echo "Running QUnit headless tests..."
+      npm run test:headless
     )
   else
     echo "npm is not installed. Skipping QUnit setup."

@@ -4,12 +4,14 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test:headless": "node run-qunit-headless.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "qunit": "^2.24.1"
+    "qunit": "^2.24.1",
+    "puppeteer": "^22.9.0"
   }
 }
