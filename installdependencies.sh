@@ -57,11 +57,28 @@ apt-get install -y \
     php${PHP_VERSION}-intl php${PHP_VERSION}-mbstring php${PHP_VERSION}-soap \
     php${PHP_VERSION}-zip php${PHP_VERSION}-bcmath
 
-
-# Output PHP version and path
-echo "PHP ${PHP_VERSION} installed."
+echo "--- PHP ${PHP_VERSION} Installation Details ---"
 PHP_EXECUTABLE_PATH=$(which php${PHP_VERSION} || echo "/usr/bin/php${PHP_VERSION}")
-echo "PHP executable likely at: ${PHP_EXECUTABLE_PATH}"
+echo "PHP executable location: ${PHP_EXECUTABLE_PATH}"
+if [ -n "${PHP_EXECUTABLE_PATH}" ] && [ -x "${PHP_EXECUTABLE_PATH}" ]; then
+    PHP_INI_PATH=$(${PHP_EXECUTABLE_PATH} -r "echo php_ini_loaded_file();")
+    echo "PHP INI file location: ${PHP_INI_PATH}"
+    PHP_EXT_DIR=$(${PHP_EXECUTABLE_PATH} -r "echo ini_get('extension_dir');")
+    echo "PHP extensions directory: ${PHP_EXT_DIR}"
+else
+    echo "Could not determine PHP INI path or extension directory."
+fi
+echo "-------------------------------------------"
+
+# Attempt to add PHP to PATH if not already there
+PHP_DIR_PATH=$(dirname "${PHP_EXECUTABLE_PATH}")
+if [[ ":$PATH:" != *":${PHP_DIR_PATH}:"* ]]; then
+    echo "Adding PHP directory ${PHP_DIR_PATH} to PATH for this session."
+    export PATH="${PHP_DIR_PATH}:${PATH}"
+    echo "Note: To make this permanent, add 'export PATH=\"${PHP_DIR_PATH}:\${PATH}\"' to your ~/.bashrc or ~/.profile"
+fi
+
+
 echo ">>> Configuring and enabling services..."
 a2dismod php* || true # Disable old mod_php if it exists
 a2enmod proxy_fcgi setenvif rewrite
@@ -86,11 +103,26 @@ mysql --execute="FLUSH PRIVILEGES;"
 
 echo ">>> Installing WP-CLI..."
 if ! command -v wp &> /dev/null; then
-    curl -sSL -o /usr/local/bin/wp https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
-    chmod +x /usr/local/bin/wp
-    wp --info --allow-root
+    WP_CLI_PATH="/usr/local/bin/wp"
+    echo "Downloading WP-CLI to ${WP_CLI_PATH}..."
+    curl -sSL -o ${WP_CLI_PATH} https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+    chmod +x ${WP_CLI_PATH}
+    echo "--- WP-CLI Installation Details ---"
+    ${WP_CLI_PATH} --info --allow-root
+    echo "WP-CLI installed at: ${WP_CLI_PATH}"
+    WP_CLI_DIR_PATH=$(dirname "${WP_CLI_PATH}")
+    if [[ ":$PATH:" != *":${WP_CLI_DIR_PATH}:"* ]]; then
+        echo "Adding WP-CLI directory ${WP_CLI_DIR_PATH} to PATH for this session."
+        export PATH="${WP_CLI_DIR_PATH}:${PATH}"
+        echo "Note: To make this permanent, add 'export PATH=\"${WP_CLI_DIR_PATH}:\${PATH}\"' to your ~/.bashrc or ~/.profile"
+    fi
+    echo "----------------------------------"
 else
-    echo "WP-CLI is already installed."
+    WP_CLI_PATH=$(which wp)
+    echo "WP-CLI is already installed at: ${WP_CLI_PATH}"
+    echo "--- WP-CLI Details ---"
+    wp --info --allow-root
+    echo "----------------------"
 fi
 
 echo ">>> Installing WordPress (Main Site)..."
@@ -150,16 +182,26 @@ if [ ! -d "${WP_TESTS_DIR}" ]; then
     echo "Installing Composer dependencies in ${WP_TESTS_DIR}..."
     (
       cd "${WP_TESTS_DIR}"
+      COMPOSER_PATH=""
       if ! command -v composer &> /dev/null; then
-        echo "Composer not found globally, downloading locally..."
+        echo "Composer not found globally, downloading locally to $(pwd)/composer.phar..."
         curl -sS https://getcomposer.org/installer | php
-
-        PHP_EXECUTABLE_PATH_FOR_COMPOSER=$(which php${PHP_VERSION} || echo "php") # Use specific PHP if possible
-        ${PHP_EXECUTABLE_PATH_FOR_COMPOSER} composer.phar install
-        echo "Locally downloaded composer.phar is at: $(pwd)/composer.phar"
+        COMPOSER_PATH="$(pwd)/composer.phar"
+        PHP_EXECUTABLE_PATH_FOR_COMPOSER=$(which php${PHP_VERSION} || echo "php")
+        echo "Running composer install using: ${PHP_EXECUTABLE_PATH_FOR_COMPOSER} ${COMPOSER_PATH}"
+        ${PHP_EXECUTABLE_PATH_FOR_COMPOSER} ${COMPOSER_PATH} install
+        echo "--- Composer (local) Details ---"
+        echo "Composer executable: ${COMPOSER_PATH}"
+        echo "Installed dependencies for WordPress-Develop in $(pwd)"
+        echo "--------------------------------"
       else
-        echo "Using globally installed Composer: $(which composer)"
+        COMPOSER_PATH=$(which composer)
+        echo "Using globally installed Composer: ${COMPOSER_PATH}"
         composer install
+        echo "--- Composer (global) Details ---"
+        echo "Composer executable: ${COMPOSER_PATH}"
+        echo "Installed dependencies for WordPress-Develop in $(pwd)"
+        echo "---------------------------------"
       fi
     )
 fi
@@ -177,13 +219,39 @@ fi
 # Ensure npm is available
 if ! command -v npm &> /dev/null; then
   echo "npm is not installed. Skipping QUnit setup."
+  NPM_PATH=""
 else
+  NPM_PATH=$(which npm)
+  NODE_PATH=$(which node)
+  echo "--- Node.js and NPM Details ---"
+  echo "Node.js executable: ${NODE_PATH}"
+  echo "NPM executable: ${NPM_PATH}"
+  echo "NPM version: $(npm --version)"
+  echo "Node version: $(node --version)"
+  echo "-------------------------------"
+
+  NPM_DIR_PATH=$(dirname "${NPM_PATH}")
+  NODE_DIR_PATH=$(dirname "${NODE_PATH}")
+
+  if [[ ":$PATH:" != *":${NPM_DIR_PATH}:"* ]]; then
+    echo "Adding NPM directory ${NPM_DIR_PATH} to PATH for this session."
+    export PATH="${NPM_DIR_PATH}:${PATH}"
+    echo "Note: To make this permanent, add 'export PATH=\"${NPM_DIR_PATH}:\${PATH}\"' to your ~/.bashrc or ~/.profile"
+  fi
+  # Node path might be the same, but add if different and not present
+  if [[ "${NPM_DIR_PATH}" != "${NODE_DIR_PATH}" ]] && [[ ":$PATH:" != *":${NODE_DIR_PATH}:"* ]]; then
+    echo "Adding Node.js directory ${NODE_DIR_PATH} to PATH for this session."
+    export PATH="${NODE_DIR_PATH}:${PATH}"
+    echo "Note: To make this permanent, add 'export PATH=\"${NODE_DIR_PATH}:\${PATH}\"' to your ~/.bashrc or ~/.profile"
+  fi
+
+
   # Create a basic package.json if it doesn't exist
   if [ ! -f "${JS_TEST_DIR}/package.json" ]; then
     echo "Creating basic package.json in ${JS_TEST_DIR}..."
     (
       cd "$JS_TEST_DIR"
-      npm init -y
+      ${NPM_PATH} init -y
     )
   fi
 
@@ -192,10 +260,12 @@ else
     cd "$JS_TEST_DIR"
     # Check if QUnit is already a dependency to avoid unnecessary reinstall or version change
     if ! grep -q '"qunit"' package.json; then
-      npm install --save-dev qunit
+      ${NPM_PATH} install --save-dev qunit
+      echo "QUnit installed. Location: $(pwd)/node_modules/qunit"
     else
       echo "QUnit already listed in package.json, running npm install to ensure it's installed."
-      npm install
+      ${NPM_PATH} install
+      echo "QUnit location: $(pwd)/node_modules/qunit"
     fi
   )
 
