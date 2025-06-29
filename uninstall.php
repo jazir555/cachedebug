@@ -12,22 +12,50 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 	exit;
 }
 
-// Note: Transients are generally auto-expired.
-// Explicitly deleting them here is for thorough cleanup, especially if they store large data
-// or if the plugin is not going to be used again.
-// For user-specific transients like those used in this plugin (cd_assets_..., cd_rest_calls_...),
-// they will eventually expire. A general cleanup of all plugin transients could be done
-// if a very consistent prefix was used for ALL transients set by the plugin and there's a way
-// to list/delete them, but this is often complex and potentially risky.
+global $wpdb;
 
-// Example: If the plugin stored options:
-// delete_option( 'cache_detector_settings' );
+// Delete user-specific REST API call transients
+// Transients are stored in the options table with names like:
+// _transient_cd_rest_calls_{user_id}
+// _transient_timeout_cd_rest_calls_{user_id}
 
-// No options are currently stored by this plugin.
-// Transients are user-specific and page-specific and will expire.
-// A more aggressive cleanup of transients would require iterating through all options
-// with `_transient_cd_%` which is not recommended for performance on uninstall.
+// We can use a LIKE query to find all such option names.
+$rest_transient_options = $wpdb->get_col(
+    $wpdb->prepare(
+        "SELECT option_name FROM $wpdb->options WHERE option_name LIKE %s OR option_name LIKE %s",
+        '_transient_cd_rest_calls_%',
+        '_transient_timeout_cd_rest_calls_%'
+    )
+);
 
-if ( defined('WP_DEBUG') && WP_DEBUG ) {
-    error_log('[Cache Detector] Uninstall script run. No specific options to delete. Transients will auto-expire.');
+$deleted_count = 0;
+if ( ! empty( $rest_transient_options ) ) {
+    foreach ( $rest_transient_options as $option_name ) {
+        // To use delete_transient(), we need the base key (without _transient_ or _transient_timeout_)
+        if ( strpos( $option_name, '_transient_timeout_' ) === 0 ) {
+            $base_key = substr( $option_name, strlen( '_transient_timeout_' ) );
+        } elseif ( strpos( $option_name, '_transient_' ) === 0 ) {
+            $base_key = substr( $option_name, strlen( '_transient_' ) );
+        } else {
+            // Should not happen with the LIKE query, but as a safeguard
+            $base_key = null;
+        }
+
+        if ( $base_key && strpos( $base_key, 'cd_rest_calls_' ) === 0 ) {
+            delete_transient( $base_key ); // This will delete both the transient and its timeout.
+            if ( strpos( $option_name, '_transient_timeout_' ) !== 0 ) { // Count actual transients, not timeouts separately for this log.
+                 $deleted_count++;
+            }
+        }
+    }
+}
+
+// Asset transients 'cd_assets_{md5(page_url_user_id)}' are harder to clean up without knowing all page URLs and user IDs.
+// The md5 hash makes wildcard SQL deletion impractical for these specific keys without iterating all options.
+// Relying on auto-expiration for these is a more practical approach to avoid performance issues on uninstall.
+
+// No persistent options are currently stored by this plugin that need deletion.
+
+if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+    error_log('[Cache Detector] Uninstall script run. Attempted to delete ' . $deleted_count . ' user-specific REST call transients (cd_rest_calls_*). Asset-related transients (cd_assets_*) will auto-expire.');
 }

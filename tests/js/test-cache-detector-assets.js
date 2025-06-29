@@ -1,9 +1,7 @@
-// This test file will use QUnit and Sinon.JS for mocking.
-// Ensure Sinon.JS is included in the HTML test runner before this script.
+// tests/js/test-cache-detector-assets.js
 
 QUnit.module('Cache Detector Assets JS', function(hooks) {
     hooks.beforeEach(function() {
-        // Mock the global object provided by wp_localize_script
         window.cache_detector_ajax = {
             ajax_url: '/fake-admin-ajax.php',
             asset_nonce: 'testassetnonce',
@@ -11,155 +9,179 @@ QUnit.module('Cache Detector Assets JS', function(hooks) {
             current_page_url: 'http://example.com/current-page'
         };
 
-        // Mock performance.getEntriesByType
+        this.performanceEntries = [];
+        // Ensure window.performance exists for the script
+        if (!window.performance) {
+            window.performance = {};
+        }
         this.originalGetEntriesByType = window.performance.getEntriesByType;
-        this.performanceEntries = []; // Default to empty
         window.performance.getEntriesByType = sinon.stub().returns(this.performanceEntries);
 
-        // Stub window.fetch
         this.originalFetch = window.fetch;
-        window.fetch = sinon.stub();
+        this.fetchStub = sinon.stub();
+        window.fetch = this.fetchStub;
 
-        // Store the original XMLHttpRequest
-        this.originalXMLHttpRequest = window.XMLHttpRequest;
-        // We will use sinon.useFakeXMLHttpRequest to capture XHR calls if the script uses it for REST API.
+        this.xhr = sinon.useFakeXMLHttpRequest();
+        this.requests = []; // To store captured XHR requests
+        this.xhr.onCreate = (req) => {
+            this.requests.push(req);
+        };
+
+        this.clock = sinon.useFakeTimers();
+
+        // The main script cache-detector-assets.js is an IIFE.
+        // It's assumed to be loaded in the test HTML (qunit-tests.html) AFTER sinon.js
+        // and BEFORE this test script file.
+        // Its event listeners and wrappers for fetch/XHR would have been set up when it loaded.
     });
 
     hooks.afterEach(function() {
-        // Restore original functions and objects
         window.performance.getEntriesByType = this.originalGetEntriesByType;
         window.fetch = this.originalFetch;
-        window.XMLHttpRequest = this.originalXMLHttpRequest;
-
+        this.xhr.restore();
+        this.clock.restore();
         delete window.cache_detector_ajax;
-        // sinon.restore(); // This would restore all sinon stubs/spies if using a global sinon instance.
-                           // Here, we are restoring them manually.
+        this.requests = [];
     });
 
-    QUnit.test('Initialization - CacheDetectorAssets object and init method', function(assert) {
-        assert.ok(window.CacheDetectorAssets, 'CacheDetectorAssets global object should exist.');
-        assert.strictEqual(typeof window.CacheDetectorAssets.init, 'function', 'CacheDetectorAssets.init should be a function.');
-        // Call init to ensure it doesn't throw errors with mocks in place
-        assert.doesNotThrow(function() {
-            window.CacheDetectorAssets.init();
-        }, 'CacheDetectorAssets.init() should run without errors.');
-    });
-
-    QUnit.test('collectAndSendAssetData - sends correct data via fetch', function(assert) {
+    QUnit.test('Asset data collection on window.load', function(assert) {
         const done = assert.async();
 
-        // Prepare mock performance entries
         const mockEntries = [
-            { name: 'http://example.com/style.css', initiatorType: 'link', entryType: 'resource', transferSize: 100, decodedBodySize: 200, serverTiming: [] },
-            { name: 'http://example.com/script.js', initiatorType: 'script', entryType: 'resource', transferSize: 150, decodedBodySize: 300, serverTiming: [{name: 'cdn-cache', description:'HIT', duration: 0}] }
+            { name: 'http://example.com/style.css', initiatorType: 'link', entryType: 'resource', transferSize: 100, decodedBodySize: 200, serverTiming: [], encodedBodySize: 200 },
+            { name: 'http://example.com/script.js', initiatorType: 'script', entryType: 'resource', transferSize: 0, decodedBodySize: 300, serverTiming: [{name: 'cf-cache-status', description:'HIT', duration: 0}], encodedBodySize: 300 }
         ];
         window.performance.getEntriesByType.withArgs('resource').returns(mockEntries);
 
-        // Configure fetch stub for asset data
-        window.fetch.withArgs(window.cache_detector_ajax.ajax_url, sinon.match.has('body', sinon.match(formData => formData.get('action') === 'cache_detector_receive_assets')))
-            .resolves(Promise.resolve(new Response(JSON.stringify({ success: true, data: { count: 2 } }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+        // Dispatch the load event - this should trigger collectAndSendAssetData in the IIFE
+        const loadEvent = new Event('load');
+        window.dispatchEvent(loadEvent);
 
-        // Call the method that triggers data collection and sending.
-        // This assumes CacheDetectorAssets.init() sets up listeners or calls collectAndSendAssetData.
-        // For direct testing, if collectAndSendAssetData is public, call it.
-        // Let's assume it's part of the init or a load event.
-        // We might need to simulate window.onload if it's tied to that.
+        // The script uses setTimeout(..., 1200) before sending asset data
+        this.clock.tick(1200);
 
-        // Manually trigger the part of init that would call collectAndSendAssetData, or call it directly if public.
-        // For this example, let's assume it's callable for testing or init triggers it.
-        // If CacheDetectorAssets.collectAndSendAssetData is the actual function:
-        if (typeof CacheDetectorAssets.collectAndSendAssetData === 'function') {
-             CacheDetectorAssets.collectAndSendAssetData();
-        } else {
-            // If it's triggered by an event like 'load', that event needs to be dispatched.
-            // For simplicity, we assume the function can be called or init already called it.
-            // This might require refactoring the source JS for better testability if logic is too coupled to load event.
-            console.warn('Test assumes collectAndSendAssetData is callable or init triggers it.');
-            // As a fallback, let's call init again if the function isn't directly exposed.
-            CacheDetectorAssets.init();
-        }
+        assert.equal(this.requests.length, 1, "One AJAX request should have been made for assets.");
+        if (this.requests.length > 0) {
+            const request = this.requests[0];
+            assert.ok(request.url.includes(window.cache_detector_ajax.ajax_url), "Request URL should be the AJAX URL.");
+            assert.equal(request.method, "POST", "Request method should be POST.");
 
+            const params = new URLSearchParams(request.requestBody);
+            assert.equal(params.get('action'), 'cache_detector_receive_assets', 'Action should be cache_detector_receive_assets.');
+            assert.equal(params.get('nonce'), 'testassetnonce', 'Nonce should match.');
+            assert.ok(params.has('asset_data'), 'Request should contain asset_data.');
 
-        // Wait for the fetch call to be made (it might be inside a setTimeout or after 'load')
-        setTimeout(function() {
-            assert.ok(window.fetch.calledOnce, 'fetch should have been called once for asset data.');
-
-            const fetchCall = window.fetch.getCall(0); // Get the first call to fetch
-            if (!fetchCall) {
-                assert.ok(false, 'Fetch was not called as expected.');
-                done();
-                return;
-            }
-
-            const fetchOptions = fetchCall.args[1]; // Second argument to fetch is the options object
-            const formData = fetchOptions.body; // Assuming body is FormData
-
-            assert.ok(formData.has('action'), 'AJAX body should have action.');
-            assert.equal(formData.get('action'), 'cache_detector_receive_assets', 'Action should be cache_detector_receive_assets.');
-            assert.equal(formData.get('nonce'), 'testassetnonce', 'Nonce should match.');
-            assert.ok(formData.get('asset_data'), 'AJAX body should have asset_data.');
-
-            const sentAssetData = JSON.parse(formData.get('asset_data'));
+            const sentAssetData = JSON.parse(params.get('asset_data'));
             assert.equal(sentAssetData.length, 2, 'Two assets should have been sent.');
-            assert.equal(sentAssetData[0].url, 'http://example.com/style.css', 'First asset URL should match.');
-            assert.equal(sentAssetData[1].serverTiming[0].name, 'cdn-cache', 'Server timing should be present.');
-
-            done();
-        }, 200); // Increased timeout to ensure any internal delays in script are covered
+            assert.equal(sentAssetData[0].url, 'http://example.com/style.css');
+            assert.equal(sentAssetData[0].status, 'DOWNLOADED/MISS', 'Style.css status based on size analysis');
+            assert.equal(sentAssetData[1].status, 'HIT (CF)', 'Second asset status should be HIT from Cloudflare ServerTiming.');
+        }
+        done();
     });
 
-    QUnit.test('captureAndSendRestApiCalls - intercepts fetch and sends data', function(assert) {
+    QUnit.test('REST API call (fetch) interception and data sending', function(assert) {
         const done = assert.async();
         const fakeRestUrl = 'http://example.com/wp-json/custom/v1/data';
 
-        // Configure the main fetch stub (for the actual REST call being intercepted)
-        window.fetch.withArgs(fakeRestUrl)
-            .resolves(Promise.resolve(new Response(JSON.stringify({ data: 'test' }), { status: 200, headers: { 'Content-Type': 'application/json', 'X-Test-Header': 'RestValue' } })));
+        this.fetchStub.withArgs(fakeRestUrl)
+            .resolves(Promise.resolve(new Response(JSON.stringify({ data: 'test' }), {
+                status: 200,
+                headers: new Headers({ 'Content-Type': 'application/json', 'X-Test-Header': 'RestValue' }),
+                url: fakeRestUrl
+            })));
 
-        // Configure fetch stub for the AJAX call sending the REST data
-        window.fetch.withArgs(window.cache_detector_ajax.ajax_url, sinon.match.has('body', sinon.match(formData => formData.get('action') === 'cache_detector_receive_rest_api_calls')))
-            .resolves(Promise.resolve(new Response(JSON.stringify({ success: true, data: { count: 1 } }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+        window.fetch(fakeRestUrl, { method: 'GET' })
+            .then(() => {
+                this.clock.tick(1800); // Advance timer for sendRestApiData
 
-        // Initialize the CacheDetectorAssets to wrap fetch/XHR
-        CacheDetectorAssets.init();
-
-        // Make a "REST API" call using the now-wrapped fetch
-        window.fetch(fakeRestUrl, { method: 'GET' }).then(response => response.json()).then(() => {
-            // This part of the test assumes that captureAndSendRestApiCalls is triggered correctly
-            // by the wrapped fetch. The original script might batch these or send on page unload.
-            // For simplicity, let's assume a send operation occurs or can be triggered.
-            // If CacheDetectorAssets.sendCapturedRestData is the function:
-            if (typeof CacheDetectorAssets.sendCapturedRestData === 'function') {
-                 CacheDetectorAssets.sendCapturedRestData();
-            } else {
-                console.warn('Test assumes sendCapturedRestData is callable or automatically triggered for REST API data.');
-                // It might be sent on an interval or unload, which is harder to test synchronously.
-                // We'll check the call count for the specific AJAX action.
-            }
-
-            setTimeout(function() {
-                const ajaxCall = window.fetch.getCalls().find(call => {
-                    if (call.args[1] && call.args[1].body instanceof FormData) {
-                        return call.args[1].body.get('action') === 'cache_detector_receive_rest_api_calls';
-                    }
-                    return false;
-                });
+                assert.ok(this.requests.length >= 1, "At least one AJAX request should have been made for sending REST data.");
+                const ajaxCall = this.requests.find(req => req.requestBody && new URLSearchParams(req.requestBody).get('action') === 'cache_detector_receive_rest_api_calls');
 
                 assert.ok(ajaxCall, 'AJAX call to send REST API data should have been made.');
                 if (ajaxCall) {
-                    const formData = ajaxCall.args[1].body;
-                    assert.equal(formData.get('nonce'), 'testrestnonce', 'REST API nonce should match.');
-                    const sentRestData = JSON.parse(formData.get('rest_api_calls'));
-                    assert.equal(sentRestData.length, 1, 'One REST call should have been captured and sent.');
-                    assert.equal(sentRestData[0].url, fakeRestUrl, 'Captured REST call URL should match.');
-                    assert.ok(sentRestData[0].raw_headers.includes('x-test-header: RestValue'), 'Captured REST call headers should be present.');
+                    const params = new URLSearchParams(ajaxCall.requestBody);
+                    assert.equal(params.get('nonce'), 'testrestnonce', 'REST API nonce should match.');
+                    const sentRestData = JSON.parse(params.get('rest_api_calls'));
+                    assert.equal(sentRestData.length, 1, 'One REST call should have been captured.');
+                    assert.equal(sentRestData[0].url, fakeRestUrl);
+                    assert.ok(sentRestData[0].headers.some(h => h.toLowerCase() === 'x-test-header: RestValue'.toLowerCase()));
                 }
                 done();
-            }, 200); // Timeout for async operations
-        });
+            })
+            .catch(err => {
+                assert.ok(false, "Fetch call failed: " + err);
+                done();
+            });
     });
 
-    // TODO: Add tests for XMLHttpRequest interception if the plugin supports it.
-    // TODO: Test batching of REST API calls if implemented.
-    // TODO: Test 'beforeunload' sending logic if that's how REST/asset data is finally pushed.
+    QUnit.test('REST API call (XHR) interception and data sending', function(assert) {
+        const done = assert.async();
+        const fakeRestUrl = 'http://example.com/wp-json/xhr/v1/data';
+
+        const client = new XMLHttpRequest();
+        client.open("GET", fakeRestUrl);
+        client.setRequestHeader('X-Custom-XHR', 'XHRValue');
+
+        client.onload = () => { // This is the onload for the XHR *itself*
+            // The script's wrapper should have processed it by now (on loadend).
+            this.clock.tick(1800); // Advance timer for sendRestApiData
+
+            assert.ok(this.requests.length >= 1, "AJAX request for sending REST data should have been made.");
+            const ajaxSendDataCall = this.requests.find(req => req.requestBody && new URLSearchParams(req.requestBody).get('action') === 'cache_detector_receive_rest_api_calls');
+
+            assert.ok(ajaxSendDataCall, 'AJAX call to send REST API data should have been made.');
+            if (ajaxSendDataCall) {
+                const params = new URLSearchParams(ajaxSendDataCall.requestBody);
+                assert.equal(params.get('nonce'), 'testrestnonce');
+                const sentRestData = JSON.parse(params.get('rest_api_calls'));
+                assert.equal(sentRestData.length, 1, 'One REST call should have been captured.');
+                assert.equal(sentRestData[0].url, fakeRestUrl);
+                // Check if response headers from the original XHR are captured.
+                // getAllResponseHeaders() in the script gets "X-Response-Test: XHRTest\r\nContent-Type: application/json"
+                assert.ok(sentRestData[0].headers.some(h => h.toLowerCase() === 'x-response-test: XHRTest'.toLowerCase()), 'Response header from original XHR should be captured');
+            }
+            done();
+        };
+
+        client.send();
+
+        // Find the XHR request that the client just made to fakeRestUrl and respond to it
+        const xhrRequestToServer = this.requests.find(req => req.url === fakeRestUrl && req.method === "GET");
+        if (xhrRequestToServer) {
+             xhrRequestToServer.respond(200, { "Content-Type": "application/json", "X-Response-Test": "XHRTest" }, JSON.stringify({data: "ok"}));
+        } else {
+            assert.ok(false, "XHR to fakeRestUrl was not captured by sinon.useFakeXMLHttpRequest as expected.");
+            done();
+        }
+    });
+
+    QUnit.test('isPotentiallyCachedByBrowser logic', function(assert) {
+        // This tests the internal helper directly if it were exposed.
+        // Since it's not, we test its effect through the main asset collection.
+        // Test case 1: transferSize 0, decodedBodySize > 0  => HIT (Browser Cache - Memory/Disk)
+        let mockEntry1 = { name: 'cached.js', transferSize: 0, decodedBodySize: 1000, encodedBodySize: 1000, serverTiming: [] };
+        // Test case 2: encodedBodySize 0, transferSize > 0, decodedBodySize > 0 => HIT (Browser Cache - 304 Not Modified)
+        let mockEntry2 = { name: '304.css', transferSize: 300, decodedBodySize: 2000, encodedBodySize: 0, serverTiming: [] };
+        // Test case 3: Not matching browser cache conditions
+        let mockEntry3 = { name: 'download.png', transferSize: 1000, decodedBodySize: 1000, encodedBodySize: 1000, serverTiming: [] };
+
+        window.performance.getEntriesByType.withArgs('resource').returns([mockEntry1, mockEntry2, mockEntry3]);
+
+        const loadEvent = new Event('load');
+        window.dispatchEvent(loadEvent);
+        this.clock.tick(1200);
+
+        assert.equal(this.requests.length, 1, "Asset AJAX request made");
+        if (this.requests.length === 1) {
+            const params = new URLSearchParams(this.requests[0].requestBody);
+            const sentAssetData = JSON.parse(params.get('asset_data'));
+            assert.equal(sentAssetData.length, 3);
+            assert.equal(sentAssetData[0].status, "HIT (Browser Cache - Memory/Disk)", "Test 1 Correct");
+            assert.equal(sentAssetData[0].detectedBy, "Browser Cache Heuristics", "Test 1 DetectedBy Correct");
+            assert.equal(sentAssetData[1].status, "HIT (Browser Cache - 304 Not Modified)", "Test 2 Correct");
+            assert.equal(sentAssetData[1].detectedBy, "Browser Cache Heuristics", "Test 2 DetectedBy Correct");
+            assert.equal(sentAssetData[2].status, "DOWNLOADED/MISS", "Test 3 Correct - Fell through to size analysis");
+        }
+    });
 });

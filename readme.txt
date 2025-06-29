@@ -2,7 +2,7 @@
 Contributors: julesai
 Tags: cache, debug, performance, admin, development
 Requires at least: 5.2
-Tested up to: 6.4
+Tested up to: 6.5
 Stable tag: 0.2.0
 Requires PHP: 7.0
 License: GPL v2 or later
@@ -20,7 +20,8 @@ It works by:
 * Inspecting HTTP response headers for known caching signatures (e.g., Cloudflare, LiteSpeed, WP Rocket, Varnish, Sucuri, Fastly, Akamai, SG Optimizer).
 * Looking for HTML footprints left by common WordPress caching plugins.
 * Displaying the detected cache status for the main page request directly in the WordPress admin bar.
-* Collecting information about loaded assets (CSS, JS, images) and REST API calls on the frontend, showing their cache status in the admin bar dropdown for quick analysis.
+* Collecting information about loaded assets (CSS, JS, images via `PerformanceResourceTiming` API) and REST API calls (intercepting `fetch` and `XMLHttpRequest`) on the frontend.
+* Showing the cache status and details for these assets and REST API calls in the admin bar dropdown for quick analysis by users with `manage_options` capability.
 
 This tool helps you to:
 * Verify if your page caching is working as expected (HIT, MISS, BYPASS).
@@ -43,7 +44,7 @@ Developers, site administrators, or anyone who needs to understand and verify th
 
 = How does it detect cache status? =
 
-It checks for specific HTTP headers set by various caching systems and also looks for HTML comments or footprints that caching plugins often leave in the page source.
+It checks for specific HTTP headers set by various caching systems and also looks for HTML comments or footprints that caching plugins often leave in the page source. For assets and REST API calls, it uses browser APIs and analyzes their specific headers.
 
 = What caching systems can it detect? =
 
@@ -63,12 +64,15 @@ In the WordPress admin bar. The main page status is shown directly, and details 
 == Changelog ==
 
 = 0.2.0 =
-* Refactored plugin into a class-based structure with namespaces.
+* Refactored plugin into a class-based structure with namespaces (`Jules\CacheDetector`).
 * Implemented PSR-4 autoloading.
-* Enhanced cache detection logic for headers and HTML footprints, including Fastly and Akamai.
-* Improved admin bar display for assets and REST API calls.
+* Enhanced cache detection logic for headers (including Fastly, Akamai) and HTML footprints.
+* Improved admin bar display for assets (using Performance API) and REST API calls (intercepting fetch/XHR).
 * Added basic Internationalization (I18n) support.
-* Created uninstall.php for basic cleanup.
+* Created `uninstall.php` for cleanup.
+* Added PHPUnit tests for backend logic.
+* Added QUnit tests for frontend JavaScript.
+* Standardized plugin directory structure.
 
 = 0.1.0 =
 * Initial release. Basic header detection and admin bar display. Asset and REST API call collection.
