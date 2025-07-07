@@ -255,19 +255,57 @@ else
     )
   fi
 
-  echo "Installing QUnit and saving as a dev dependency in ${JS_TEST_DIR}..."
+  echo "Installing QUnit, qunit-puppeteer, and puppeteer, and saving as dev dependencies in ${JS_TEST_DIR}..."
   (
     cd "$JS_TEST_DIR"
-    # Check if QUnit is already a dependency to avoid unnecessary reinstall or version change
+    # Install QUnit if not already a dependency
     if ! grep -q '"qunit"' package.json; then
       ${NPM_PATH} install --save-dev qunit
       echo "QUnit installed. Location: $(pwd)/node_modules/qunit"
     else
-      echo "QUnit already listed in package.json, running npm install to ensure it's installed."
-      ${NPM_PATH} install
-      echo "QUnit location: $(pwd)/node_modules/qunit"
+      echo "QUnit already listed in package.json."
     fi
+
+    # Install qunit-puppeteer and puppeteer if not already dependencies
+    # puppeteer is listed as a peer/dev dependency for qunit-puppeteer
+    # We install it explicitly to ensure it's available.
+    if ! grep -q '"qunit-puppeteer"' package.json; then
+      ${NPM_PATH} install --save-dev qunit-puppeteer puppeteer
+      echo "qunit-puppeteer and puppeteer installed."
+    else
+      echo "qunit-puppeteer already listed in package.json."
+    fi
+
+    # Always run npm install here to ensure all dependencies are met before trying to set package scripts
+    # This covers cases where dependencies were listed but not fully installed.
+    echo "Running npm install in ${JS_TEST_DIR} to ensure all dependencies are installed..."
+    ${NPM_PATH} install
+
+    echo "Adding 'test:headless' script to package.json..."
+    # Use npm pkg to reliably add/update the script
+    # This creates the "scripts" object if it doesn't exist.
+    ${NPM_PATH} pkg set scripts.test:headless="qunit-puppeteer qunit-tests.html"
+    echo "Current package.json scripts:"
+    ${NPM_PATH} pkg get scripts
   )
+  ( # Subshell for chown
+  cd "$JS_TEST_DIR"
+  # The npm install that was here has been removed as it's redundant
+  # with the one a few lines above, after package.json modifications.
+  
+  # Add this chown command
+  if [ -n "${SUDO_USER}" ] && [ -d "node_modules" ]; then
+    echo "Changing ownership of node_modules back to ${SUDO_USER}..."
+    chown -R "${SUDO_USER}:${SUDO_USER}" node_modules
+  elif [ -d "node_modules" ]; then
+    # Fallback if SUDO_USER isn't set, though less reliable
+    CURRENT_USER=$(whoami)
+    if [ "${CURRENT_USER}" != "root" ]; then # Avoid chowning to root if script somehow not sudo
+        echo "Changing ownership of node_modules to ${CURRENT_USER}..."
+        chown -R "${CURRENT_USER}:${CURRENT_USER}" node_modules
+    fi 
+  fi
+)
 
   echo "Creating QUnit HTML runner: ${JS_TEST_DIR}/qunit-tests.html..."
   cat > "${JS_TEST_DIR}/qunit-tests.html" <<EOF
@@ -305,7 +343,7 @@ QUnit.module('Example Tests', function() {
 });
 EOF
   echo "QUnit setup complete. Open ${JS_TEST_DIR}/qunit-tests.html in a browser to run tests."
-fi # Added missing fi for the npm check
+fi # This 'fi' closes the 'if ! command -v npm &> /dev/null'
 # Assuming the script is run from the repository root
 # and tests/js/package.json exists
 if [ -f "tests/js/package.json" ]; then
@@ -313,8 +351,8 @@ if [ -f "tests/js/package.json" ]; then
     echo "Installing QUnit dependencies via npm in tests/js/..."
     (
       cd tests/js
-      echo "Running npm install in tests/js..."
-      npm install
+      # npm install was here, removed as it should be redundant with the earlier install
+      # in the main QUnit setup block after package.json modifications.
       echo "Running QUnit headless tests..."
       npm run test:headless
     )
