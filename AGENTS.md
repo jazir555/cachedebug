@@ -280,7 +280,7 @@ Thorough testing is non-negotiable for producing a quality plugin.
     -   Test in WordPress Multisite environments if your plugin is intended to support it.
     -   Test across different modern web browsers.
 -   **Test Setup Automation**:
-    -   Use the script `installdependencies.sh to automate the setup of the WordPress testing environment. 
+    -   Use the script `installdependencies.sh to automate the setup of the WordPress testing environment. This script must be run with sudo.
 -   **Test Coverage**: Aim for good test coverage, but prioritize testing critical functionality and complex logic.
 -   **Visual Regression Testing**: For UI-heavy plugins, tools can capture screenshots and compare them to baseline versions to detect unintended visual changes.
 -   **User Acceptance Testing (UAT)**: Before a major release, have real users test the plugin in beta to get feedback.
